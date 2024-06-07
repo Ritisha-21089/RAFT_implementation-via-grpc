@@ -1,0 +1,69 @@
+syntax = "proto3";
+
+package raft;
+
+service CandidateFunction {
+  rpc vote_request (voter_details) returns (voter_response){};
+}
+
+service ClientFunction {
+  rpc set_pair (key_value) returns (server_response){};
+  rpc get_pair (key) returns (server_response){};
+}
+
+service LeaderFunction {
+  rpc log_request (leader_details) returns (log_response){};
+}
+
+message key_value {
+  string key = 1;
+  string value = 2;
+}
+
+message key {
+  string key = 1;
+}
+
+message voter_details {
+  int32 node_id = 1;
+  int32 current_term = 2;
+  int32 log_length = 3;
+  int32 last_term = 4;
+}
+
+message leader_details {
+  int32 leader_id = 1;
+  int32 term = 2;
+  int32 prefix_len = 3;
+  int32 prefix_term = 4;
+  int32 leader_commit = 5;
+  repeated log_entry suffix = 6;
+  string no_op = 7;
+  float lease_time = 8;
+}
+
+message log_entry {
+  string key = 1;
+  string value = 2;
+  int32 term = 3;
+}
+
+message voter_response {
+  int32 node_id = 1;
+  int32 term = 2;
+  bool granted = 3;
+  float lease_time = 4;
+}
+
+message log_response {
+  int32 node_id = 1;
+  int32 term = 2;
+  int32 ack = 3;
+  bool status = 4;
+}
+
+message server_response {
+  string data = 1;
+  int32 leader_id = 2;
+  string status = 3;
+}
