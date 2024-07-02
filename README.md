@@ -17,7 +17,7 @@ We aim to build a database that stores key-value pairs mapping string (key) to s
 
 ## Overview
 
-In this project we have implemented the Raft algorithm with the leader lease modification. Each node will be a process hosted on a separate Virtual Machine on Google Cloud, and the client can reside either in Google Cloud’s Virtual Machine or in the local machine. You can use gRPC (RECOMMENDED) or ZeroMQ for communication between nodes along with client-node interaction [NO other communication library is allowed].
+In this project we have implemented the Raft algorithm with the leader lease modification. Each node will be a process hosted on a separate Virtual Machine on Google Cloud, and the client can reside either in Google Cloud’s Virtual Machine or in the local machine.   I have used gRPC for communication between nodes along with client-node interaction. 
 
 ### Raft Modification (for faster Reads)
 Leader Lease: A time-based “lease” for Raft leadership that gets propagated through the heartbeat mechanism. If we have well-behaved clocks, we can obtain linearizable reads without paying a round-trip latency penalty. This is achieved using the concept of Leases.
