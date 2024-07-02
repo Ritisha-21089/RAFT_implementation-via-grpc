@@ -1,6 +1,4 @@
-# README
-
-## RAFT Application
+# RAFT Application
 
 This projec focuses on implementing a modified Raft system similar to those used by geo-distributed Database clusters such as CockroachDB or YugabyteDB. Raft is a consensus algorithm designed for distributed systems to ensure fault tolerance and consistency. It operates through leader election, log replication, and commitment of entries across a cluster of nodes.
 
@@ -89,5 +87,4 @@ The dump.txt file collects and stores necessary print statements for debugging a
 - Use interrupts to stop a node/program and restart the node by executing the program again.
 
 ## Instructions
-1. Clone the repository and navigate to the assignment directory.
-2. Run each node as a separate process on different VMs on Google Cloud.
+1. To simulate, Run each node as a separate process on different VMs on Google Cloud.
