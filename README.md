@@ -77,7 +77,7 @@ message ServeClientReply {
 - **Follower Committing an Entry:** Use LeaderCommit field in the AppendEntry RPC.
 
 #### 8. Print Statements & Dump.txt
-Include necessary print statements for debugging and state tracking. Example print statements:
+The dump.txt file collects and stores necessary print statements for debugging and state tracking. Example print statements:
 - Leader sending heartbeats: "Leader {NodeID} sending heartbeat & Renewing Lease"
 - Leader lease renewal failed: "Leader {NodeID} lease renewal failed. Stepping Down."
 - Node starting election: “Node {NodeID} election timer timed out, Starting election."
