@@ -1,35 +1,23 @@
-# RAFT Application
+# Raft Consensus with Leader Leases
 
-This projec focuses on implementing a modified Raft system similar to those used by geo-distributed Database clusters such as CockroachDB or YugabyteDB. Raft is a consensus algorithm designed for distributed systems to ensure fault tolerance and consistency. It operates through leader election, log replication, and commitment of entries across a cluster of nodes.
+A from-scratch implementation of the Raft consensus algorithm with the **leader lease** optimisation, running as a replicated key-value store over gRPC across nodes on separate Google Cloud VMs.
 
-We aim to build a database that stores key-value pairs mapping string (key) to string (value). The Raft cluster maintains this database and ensures fault tolerance and strong consistency. The client requests the server to perform operations on this database reliably.
+## Why
 
-### Resources
-- [Raft (Main Algorithm)](https://raft.github.io/)
-- [Original Paper](https://raft.github.io/raft.pdf)
-- [Medium Explanations Part 1](https://medium.com/@eugene.lai/raft-consensus-algorithm-part-1-914b062da2b)
-- [Medium Explanations Part 2](https://medium.com/@eugene.lai/raft-consensus-algorithm-part-2-8fbbeb7f9b6d)
-- [Raft Visualization](https://raft.github.io/raftscope/index.html)
-- [Low Latency Reads in Geo-Distributed SQL with Raft Leader Leases](https://www.yugabyte.com/blog/low-latency-reads-in-geo-distributed-sql-with-raft-leader-leases/)
-- [Replication Layer (cockroachlabs.com)](https://www.cockroachlabs.com/docs/v21.1/architecture/replication-layer.html)
+In textbook Raft, a read cannot simply be answered by the leader. The leader may already have been deposed by a partition it has not noticed yet, so answering from local state risks returning stale data. The standard fix is to confirm leadership with a majority before every read — correct, but it puts a full network round trip on the read path. Across geo-distributed nodes that round trip dominates read latency.
 
-## Overview
+A **leader lease** trades a liveness assumption for that latency. The leader holds a time-bounded lease, propagated on the existing heartbeat, during which no other node can become leader. While the lease is valid the leader can serve linearizable reads from local state with no consensus round at all. The cost is a dependency on bounded clock drift: the safety argument rests on the lease expiring everywhere before a new leader acquires one. This is the same trade-off CockroachDB and YugabyteDB make.
 
-In this project we have implemented the Raft algorithm with the leader lease modification. Each node will be a process hosted on a separate Virtual Machine on Google Cloud, and the client can reside either in Google Cloud’s Virtual Machine or in the local machine.   I have used gRPC for communication between nodes along with client-node interaction. 
+## Design
 
-### Raft Modification (for faster Reads)
-Leader Lease: A time-based “lease” for Raft leadership that gets propagated through the heartbeat mechanism. If we have well-behaved clocks, we can obtain linearizable reads without paying a round-trip latency penalty. This is achieved using the concept of Leases.
+Each node runs as its own process on its own GCP VM. Nodes talk to each other, and clients talk to nodes, over gRPC with Protocol Buffers.
 
-### Implementation Details
+**Lease propagation.** The leader piggybacks the remaining lease duration on every `AppendEntries` heartbeat. If it fails to renew with a majority before expiry, it steps down rather than continuing to serve reads.
 
-#### 1. Pseudo Code
-Refer to the pseudo code (pg 60 to 66) while implementing to handle edge cases correctly. This [lecture video](https://youtu.be/u-mNf9Rt7mw) explains the same.
+**Election safety.** When a voter responds to `RequestVote`, it reports the longest remaining lease duration it knows about. A newly elected leader waits out that duration before acquiring its own lease, which is what prevents two nodes from believing they hold a valid lease at the same time.
 
-#### 2. Storage and Database Operations
-- **Persistent Logs:** Store logs, metadata, and dump files in a directory named `logs_node_x` where x is the node ID.
-- **Log Format:** Store all WRITE OPERATIONS and NO-OP operations along with the term number.
+**Persistence.** Each node keeps its own `logs_node_<id>/` directory holding the replicated log, term metadata, and a `dump.txt` trace of state transitions. The log records every write and NO-OP entry with its term:
 
-Example log.txt file:
 ```
 NO-OP 0
 SET name1 Jaggu 0
@@ -37,54 +25,36 @@ SET name2 Raju 0
 SET name3 Bheem 1
 ```
 
-#### 3. Client Interaction
-- **Leader Information:** Stores the IP addresses and ports of all nodes and the current leader ID.
-- **Request Server:** Sends GET/SET requests to the leader node and handles failures by updating the leader ID and resending the request.
+**Client protocol.** The client holds the address of every node and its current guess at the leader. It sends `GET`/`SET` to that leader; on failure the reply carries the real leader id, and the client retries against it.
 
-RPC & Protobuf for the client:
-```proto
-rpc ServeClient (ServeClientArgs) returns (ServeClientReply) {}
+## Trade-offs
 
-message ServeClientArgs {
-  string Request = 1;
-}
+- **Leases assume bounded clock drift.** If clocks skew further than the lease margin, two nodes can believe they hold the lease and linearizability breaks. Plain Raft has no such assumption. This is a deliberate choice for read latency, not a free win.
+- **Reads get faster; writes do not.** Writes still need log replication to a majority. The optimisation only removes the read-path round trip.
+- **Fixed cluster membership.** Nodes are configured at startup. There is no joint-consensus reconfiguration, which keeps the election logic small but means the cluster cannot be resized while running.
+- **Crash recovery is file-based.** Restarting a node replays its on-disk log rather than fetching a snapshot, so recovery time grows with log length.
 
-message ServeClientReply {
-  string Data = 1;
-  string LeaderID = 2;
-  bool Success = 3;
-}
+## Running it
+
+```bash
+# on each VM, one process per node
+python node.py <node_id>
+
+# client, from any VM or locally
+python client.py
 ```
 
-#### 4. Standard Raft RPCs
-- **AppendEntry:** Used for heartbeats and log replication, must send the lease interval duration.
-- **RequestVote:** Voters must propagate the longest remaining duration of the old leader’s lease.
+Node addresses are configured in the node list; each node writes its own `logs_node_<id>/` directory on start.
 
-#### 5. Election Functionalities
-- **Start Election:** Nodes start an election if no event is received within the election timeout.
-- **Receive Voting Request:** Nodes vote for candidates based on specific conditions.
-- **Leader State:** New leaders wait for the old leader's lease timeout before acquiring their own lease.
+## What I would do differently
 
-#### 6. Log Replication Functionalities
-- **Periodic Heartbeats:** Sent by the leader to maintain its state and reacquire the lease.
-- **Replicate Log Request:** Synchronizes follower's logs with the leader's.
-- **Replicate Log Reply:** Nodes accept AppendEntriesRPC based on certain conditions.
+- No log compaction or snapshotting, so the log grows without bound and restart cost grows with it.
+- Lease and election timeouts are hard-coded constants; they should be configurable and tuned to measured inter-node RTT.
+- Testing was manual — killing processes and watching `dump.txt`. A deterministic simulation harness that injects partitions and clock skew would be far better evidence that the lease logic is actually correct.
+- No metrics. Election frequency and lease renewal failures are the two numbers that would tell you whether the timeouts are tuned sensibly.
 
-#### 7. Committing Entries
-- **Leader Committing an Entry:** Majority of nodes must acknowledge appending the entry.
-- **Follower Committing an Entry:** Use LeaderCommit field in the AppendEntry RPC.
+## References
 
-#### 8. Print Statements & Dump.txt
-The dump.txt file collects and stores necessary print statements for debugging and state tracking. Example print statements:
-- Leader sending heartbeats: "Leader {NodeID} sending heartbeat & Renewing Lease"
-- Leader lease renewal failed: "Leader {NodeID} lease renewal failed. Stepping Down."
-- Node starting election: “Node {NodeID} election timer timed out, Starting election."
-- Node becoming leader: "Node {NodeID} became the leader for term {TermNumber}."
-- Follower node committed entry: "Node {NodeID} (follower) committed the entry {entry operation} to the state machine."
-
-## Assumptions
-- Create one cluster of the database using Raft with a fixed number of nodes from the start.
-- Use interrupts to stop a node/program and restart the node by executing the program again.
-
-## Instructions
-1. To simulate, Run each node as a separate process on different VMs on Google Cloud.
+- [Raft](https://raft.github.io/) and the [original paper](https://raft.github.io/raft.pdf)
+- [Low latency reads in geo-distributed SQL with Raft leader leases](https://www.yugabyte.com/blog/low-latency-reads-in-geo-distributed-sql-with-raft-leader-leases/) — YugabyteDB
+- [CockroachDB replication layer](https://www.cockroachlabs.com/docs/v21.1/architecture/replication-layer.html)
